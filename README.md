@@ -1,6 +1,6 @@
-# 个人博客（v1.0）
+# 个人博客（v1.1）
 
-一个前后端分离的个人博客：主页展示简介与精选内容，项目与文章各自有列表和详情，联系页读取站点配置。v1.0 只做「展示」，不包含登录、鉴权与后台管理。
+一个前后端分离的个人博客：主页展示简介与精选内容，项目与文章各自有列表和详情，联系页读取站点配置并支持**游客留言**。v1.1 在 v1.0 的展示能力上增加了无需登录的留言提交，留言只入库待审核，不公开展示；仍然不包含登录、鉴权与后台管理。
 
 - 前端：Vue 3 + Vite + Vue Router + Axios + Pinia
 - 后端：Node.js + Express + mysql2（`mysql2/promise`）
@@ -11,17 +11,18 @@
 
 ## 1. 功能范围
 
-| 板块 | v1.0 已实现 |
+| 板块 | v1.1 已实现 |
 | --- | --- |
 | 主页 `/` | 个人简介、社交链接、精选项目（3 个）、最新文章（5 篇）、统计、联系入口 |
 | 项目 `/projects` | 已发布项目列表；`/projects/:slug` 展示详情、技术栈、仓库/演示链接 |
 | 文章 `/articles` | 已发布文章分页列表；`/articles/:slug` 展示正文、标签、阅读数 |
-| 联系 `/contact` | 展示邮箱、微信、坐标、社交链接；留言板占位（未开放提交） |
+| 联系 `/contact` | 展示邮箱、微信、坐标、社交链接；提供无需登录的留言表单 |
+| 留言 | `POST /api/v1/messages` 写入 `messages`，默认 `status = 'pending'`，不提供前台列表与审核页面 |
 | 其他 | 移动端响应式导航、404 页面、加载骨架、错误重试、深色模式跟随系统 |
 
-**不在 v1.0 范围**：登录/注册、后台管理、评论提交、留言提交、图片上传、富文本编辑器、RSS、全文搜索、Docker。
+**不在 v1.1 范围**：登录/注册/鉴权、后台管理、留言列表与审核界面、文章评论提交、图片上传、富文本编辑器、RSS、全文搜索、Docker。
 
-评论、留言、阅读次数统计的**数据结构与接口设计已预留**，见 [docs/database.md](docs/database.md) 与 [docs/api.md](docs/api.md)。
+留言的**写入链路已实现**，展示与审核仍是预留能力；评论与阅读次数统计的扩展点继续保留，见 [docs/database.md](docs/database.md) 与 [docs/api.md](docs/api.md)。
 
 ---
 
@@ -153,13 +154,15 @@ npm run dev
 | `TRUST_PROXY` | 否 | 0 | 部署在 Nginx 等代理后设为 `1`，用于获取真实 IP |
 | `VIEW_RATE_WINDOW_MS` | 否 | 60000 | 阅读数接口限流窗口 |
 | `VIEW_RATE_MAX` | 否 | 30 | 窗口内最大请求数 |
+| `MESSAGE_RATE_WINDOW_MS` | 否 | 3600000 | 留言接口限流窗口（默认 1 小时） |
+| `MESSAGE_RATE_MAX` | 否 | 3 | 窗口内最多留言条数 |
 
 ### 前端 `frontend/.env`
 
 | 变量 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `VITE_API_BASE_URL` | 否 | `/api/v1` | 后端 API 地址，末尾不要带 `/` |
-| `VITE_SITE_NAME` | 否 | 林间小站 | 站点名兜底值（接口未返回时使用） |
+| `VITE_SITE_NAME` | 否 | Lin的小站 | 站点名兜底值（接口未返回时使用） |
 
 > `.env` 已在 `.gitignore` 中忽略，仓库只提交 `.env.example`。
 
@@ -179,8 +182,9 @@ npm run dev
 | GET | `/articles/:slug` | 文章详情 |
 | POST | `/articles/:id/view` | 阅读次数 +1（原子更新） |
 | GET | `/contact` | 联系板块配置 |
+| POST | `/messages` | 提交游客留言（限流 + 蜜罐，写入待审核） |
 
-预留但未实现：`GET/POST /articles/:id/comments`、`POST /messages`。完整字段、错误码与预留接口的校验规则见 **[docs/api.md](docs/api.md)**。
+预留但未实现：`GET/POST /articles/:id/comments`。留言的完整字段、错误码与预留接口的校验规则见 **[docs/api.md](docs/api.md)**。
 
 ---
 
@@ -238,6 +242,16 @@ git commit -m "feat(frontend): 实现主页、项目、文章与联系页面"
 git add .
 git commit -m "docs: 补充 API、数据库与本地启动文档"
 git tag v1.0.0
+
+# v1.1 游客留言
+git checkout -b feat/v1.1-guest-messages
+git add backend/src
+git commit -m "feat(backend): 新增游客留言接口与限流校验"
+git add frontend/src
+git commit -m "feat(frontend): 联系页接入留言表单"
+git add README.md docs
+git commit -m "docs: 更新 v1.1 留言功能说明"
+git tag v1.1.0
 ```
 
 ---
@@ -247,16 +261,17 @@ git tag v1.0.0
 | 风险 | 措施 |
 | --- | --- |
 | SQL 注入 | 全部查询走 `pool.execute(sql, params)` 参数化；唯一拼接的 `LIMIT` 值先收敛为 1–50 的整数；连接池关闭 `multipleStatements` |
-| 输入校验 | `slug` 正则白名单、分页参数正整数校验、文章 id 校验；越界 `pageSize` 直接拒绝 |
+| 输入校验 | `slug` 正则白名单、分页参数正整数校验、文章 id 校验；留言的昵称/邮箱/内容长度与格式校验，越界 `pageSize` 直接拒绝 |
 | 统一错误处理 | `ApiError` + 错误中间件；数据库错误映射为可读信息；生产环境不返回堆栈与 SQL |
-| XSS | 正文以简单 HTML 存储，前端渲染前用 `utils/sanitize.js` 做**标签/属性白名单**清洗（DOMParser 建树，移除 `script`/`iframe`/事件属性，校验链接协议）；后端不返回草稿 |
+| XSS | 正文以简单 HTML 存储，前端渲染前用 `utils/sanitize.js` 做**标签/属性白名单**清洗（DOMParser 建树，移除 `script`/`iframe`/事件属性，校验链接协议）；后端不返回草稿；留言按**纯文本**入库，后续展示必须使用文本插值或转义 |
 | CORS | 仅放行 `CORS_ORIGIN` 配置的来源，生产禁止 `*` |
 | 其他响应头 | `helmet` 提供 `nosniff`、`frameguard` 等基础头；关闭 `x-powered-by` |
 | 请求体过大 | `express.json({ limit: '100kb' })` |
 | 阅读数刷量 | 后端按 IP 限流 + 数据库原子自增 + 前端 24h 去重（非严格统计） |
+| 留言刷屏 | 按 IP 限流（默认 3 条/小时）+ 隐藏蜜罐字段 + 入库 `pending` 人工审核 + 不提供公开列表接口（无 CSRF 风险，因为不涉及登录态操作） |
 | 敏感配置 | `.env` 不入库，仅提交 `.env.example` |
 
-**已知边界**：XSS 清洗在客户端执行，属于纵深防御；v1.0 没有写入接口，因此风险面很小。后续开放评论/留言时，服务端必须按纯文本处理并在入库前清洗，不能只依赖前端。
+**已知边界**：XSS 清洗在客户端执行，属于纵深防御；v1.1 唯一的写入接口是游客留言，内容以纯文本存储且不回显，风险面有限。后续实现评论或留言展示时，输出端必须转义，不能直接拼 HTML。
 
 ---
 
@@ -267,29 +282,37 @@ git tag v1.0.0
 1. **单作者博客**，无多用户、无登录、无后台；内容通过 SQL 导入维护。
 2. 数据库名使用 `personal_blog`；脚本与 `.env.example` 保持一致。
 3. 正文是「半可信」的简单 HTML（站主撰写或经审核转载），因此允许有限标签；不使用 Markdown 解析与富文本编辑器。
-4. 标签与技术栈使用逗号分隔字符串，v1.0 不做按标签筛选。
+4. 标签与技术栈使用逗号分隔字符串，v1.1 不做按标签筛选。
 5. 项目数量较少，`GET /projects` 一次性返回全部已发布项目，不分页。
 6. `pageSize` 默认 10、上限 50；文章列表前端使用 6。
 7. 阅读数去重采用「同一浏览器 24 小时」，仅用于展示，不作为精确统计。
 8. 图片只存 URL（`cover_url` / `avatar_url`），不做上传与裁剪。
 9. 时间按服务器本地时区返回 `YYYY-MM-DD HH:mm:ss`；如需跨时区，后续统一改为 UTC + 前端格式化。
 10. 部署形态为「静态前端 + Node 进程 + 独立 MySQL」，不使用 Docker。
+11. 留言只需「能提交并入库」：不提供公开列表、不做邮件通知、不做后台审核页面；审核由站主直接操作数据库完成。
+12. 昵称 2–30 字、内容 5–1000 字；邮箱选填但填写后必须格式合法，且不会对外展示。
+13. 留言限流基于进程内存，重启后计数清零；单实例部署足够，多实例部署需改为 Redis 等共享存储。
 
 ### 8.2 后续计划
 
-**v1.1 — 互动**
+**v1.1 — 游客留言（已完成）**
 
-- 实现 `GET/POST /articles/:id/comments`、`POST /messages`。
-- 评论审核（`pending → approved`）、IP 限流、蜜罐字段、纯文本入库。
-- 联系页开放留言表单。
+- `POST /api/v1/messages`、联系页留言表单、`pending` 入库。
+- IP 限流 + 蜜罐字段 + 字段级校验；不提供前台列表与审核页面。
 
-**v1.2 — 统计与内容组织**
+**v1.2 — 评论与审核**
+
+- 实现 `GET/POST /articles/:id/comments`。
+- 留言与评论的审核界面（独立管理端 + 鉴权），或先提供受保护的 CLI/脚本。
+- 评论分页、反垃圾策略增强（关键词、频控）。
+
+**v1.3 — 统计与内容组织**
 
 - `article_views` 表做服务端阅读去重；热门文章排序。
 - 标签聚合页 `/tags/:tag`；文章上一篇/下一篇。
 - RSS、sitemap、Open Graph 元信息。
 
-**v1.3 — 工程化**
+**v1.4 — 工程化**
 
 - 后端单元/接口测试（Vitest + Supertest），前端组件测试。
 - ESLint + Prettier + CI（lint / test / build）。
@@ -298,7 +321,7 @@ git tag v1.0.0
 
 **更远**
 
-- 轻量管理后台（独立路由 + JWT），支持草稿预览与定时发布。
+- 轻量管理后台（独立路由 + JWT），支持草稿预览、留言/评论审核与定时发布。
 - 图片上传与对象存储。
 - 全文搜索（MySQL FULLTEXT 或 Meilisearch）。
 
@@ -319,11 +342,15 @@ git tag v1.0.0
 | 9 | 前端四板块 | 访问 `/`、`/projects`、`/articles`、`/contact` | 均正常渲染，导航高亮正确 |
 | 10 | 详情页 | 点击任一项目/文章 | 内容、标签、元信息正确 |
 | 11 | 阅读数联动 | 首次打开文章详情 | 阅读数 +1；24h 内刷新不再增加 |
-| 12 | 联系页 | 访问 `/contact` | 显示邮箱、微信、社交链接 |
+| 12 | 联系页 | 访问 `/contact` | 显示邮箱、微信、社交链接与留言表单 |
 | 13 | 404 | 访问 `/not-exist` 并刷新 | 404 页面正常，不白屏 |
-| 14 | 移动端 | 375px 宽度 | 导航折叠为菜单，布局单列 |
+| 14 | 移动端 | 375px 宽度 | 导航折叠为菜单，布局单列，表单不溢出 |
 | 15 | Git | `git status` | 无 `node_modules`、`.env`、`dist` 被跟踪 |
 | 16 | 不使用 Docker | 检查仓库 | 无 Dockerfile / compose |
+| 17 | 留言提交 | 表单填写合法内容并提交 | `201`，提示已收到；`messages` 新增一行且 `status = 'pending'` |
+| 18 | 留言校验 | 提交 1 字昵称 / 非法邮箱 / 4 字内容 | `400`，`code: 40000`，`data` 含对应字段错误 |
+| 19 | 留言限流 | 同一 IP 连续提交超过 `MESSAGE_RATE_MAX` 条 | 超出后返回 `429`，`code: 42900` |
+| 20 | 留言不公开 | 检查前台页面与接口清单 | 没有留言列表，也没有 `GET /messages` |
 
 ---
 
@@ -344,6 +371,18 @@ MySQL 未启动、端口不对，或 `.env` 中账号密码错误。先确认 `m
 **浏览器控制台 CORS 报错**
 
 前端实际访问的地址不在 `CORS_ORIGIN` 中。把该地址加入（逗号分隔），或改用 Vite 代理方式。
+
+**留言提交后提示「留言太频繁了」**
+
+触发了按 IP 限流（默认 3 条/小时）。等待窗口结束，或调整 `MESSAGE_RATE_MAX` / `MESSAGE_RATE_WINDOW_MS` 后重启后端；内存计数在重启后会清零。
+
+**留言提交成功，但前台看不到**
+
+这是 v1.1 的预期行为：留言只入库待审核，不提供前台列表。查看数据：
+
+```bash
+mysql -u root -p -e "USE personal_blog; SELECT id,name,email,status,created_at FROM messages ORDER BY id DESC LIMIT 10;"
+```
 
 **刷新 `/articles/xxx` 在生产环境 404**
 

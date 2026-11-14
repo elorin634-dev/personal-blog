@@ -1,9 +1,11 @@
-# 数据库设计（v1.0）
+# 数据库设计（v1.1）
 
 - **数据库**：MySQL 8.0+
 - **字符集 / 排序规则**：`utf8mb4` / `utf8mb4_0900_ai_ci`（支持 emoji 与多语言，大小写不敏感）
 - **存储引擎**：InnoDB（事务、行锁、外键）
 - **脚本**：`database/schema.sql`（结构）、`database/seed.sql`（种子数据）
+
+> v1.1 变更：启用 `messages` 表的写入（游客留言）。**无需修改表结构**，v1.0 已预留该表；`comments` 与阅读次数扩展点保持不变。
 
 ---
 
@@ -158,7 +160,7 @@ v1.0 的标签只用于展示，没有按标签筛选或统计的需求。用逗
 
 **设计理由**：联系方式属于「会变但不常变」的配置，用 K/V 表可在不改代码、不改表结构的情况下调整。代价是类型弱、无法约束，因此后端在 `configService` 中集中做字段映射与默认值处理。
 
-### 2.4 comments（v1.0 仅建表）
+### 2.4 comments（v1.1 仍仅建表）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -179,19 +181,45 @@ v1.0 的标签只用于展示，没有按标签筛选或统计的需求。用逗
 
 **为什么不做登录**：游客评论以「低门槛」为目标，用审核 + 限流 + 蜜罐代替账号体系。代价是无法精准溯源，因此保留 `ip` / `user_agent` 作为最低限度的风控线索。
 
-### 2.5 messages（v1.0 仅建表）
+### 2.5 messages（v1.1 启用写入）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | INT UNSIGNED | 主键 |
-| `name` | VARCHAR(60) | 留言人称呼 |
-| `email` | VARCHAR(190) | 回复用邮箱 |
-| `content` | TEXT | 留言内容 |
-| `status` | ENUM | `pending` / `read` / `archived` |
-| `ip` / `user_agent` | VARCHAR | 风控字段 |
+| `name` | VARCHAR(60) | 留言人称呼，接口限制 2–30 字符 |
+| `email` | VARCHAR(190) | 选填，回复用；接口转小写，永不公开 |
+| `content` | TEXT | 留言内容，接口限制 5–1000 字符，纯文本 |
+| `status` | ENUM | `pending` / `read` / `archived`，新留言固定 `pending` |
+| `ip` / `user_agent` | VARCHAR | 风控字段，`user_agent` 截断至 500 字符 |
 | `created_at` | TIMESTAMP | |
 
+**v1.1 写入行为**
+
+```sql
+INSERT INTO messages (name, email, content, status, ip, user_agent)
+VALUES (?, ?, ?, 'pending', ?, ?);
+```
+
+- 由 `POST /api/v1/messages` 触发，无登录鉴权。
+- 不提供公开读取接口；列表与审核属于后续管理端能力。
+- 留言内容按纯文本存储，不做 Markdown 解析。输出到任何页面时必须转义。
+- 蜜罐字段命中时不写入数据库。
+
 留言不提供公开列表接口，避免垃圾信息与隐私泄露，因此只建了 `(status, created_at)` 索引供站主查看。
+
+**查看与审核（v1.1 手工操作）**
+
+```sql
+-- 待审核列表
+SELECT id, name, email, LEFT(content, 60) AS excerpt, created_at
+FROM messages WHERE status = 'pending' ORDER BY created_at ASC;
+
+-- 标记已读 / 归档
+UPDATE messages SET status = 'read' WHERE id = ?;
+UPDATE messages SET status = 'archived' WHERE id = ?;
+```
+
+**隐私建议**：`ip` / `user_agent` 只用于风控，建议保留 90 天后清空；备份与导出时对 `email` 脱敏。
 
 ---
 
@@ -233,15 +261,18 @@ mysql -u root -p -e "USE personal_blog; SELECT COUNT(*) FROM projects; SELECT CO
 
 ### 4.2 游客留言
 
-已预留 `messages` 表与 `POST /messages` 设计。建议：
+v1.1 已实现写入：`POST /messages` → `messages`，`status = 'pending'`，IP 限流 + 蜜罐 + 字段校验。仍待扩展：
 
-- `status` 默认 `pending`，站主标记 `read` / `archived`。
-- 不开放读接口；如需回复，走邮件。
-- 加频率限制（每 IP 每小时 3 条）与蜜罐字段。
+- **审核与查看**：管理端按 `status` 分页查询；不开放公开列表。
+- **状态流转**：`pending → read → archived`，可加 `read_at`、`handled_by` 字段。
+- **通知**：入库后异步发邮件给站主，失败不回滚留言。
+- **反垃圾**：当前限流为进程内存计数；多实例部署改为 Redis，并视情况增加关键词过滤。
+- **隐私留存**：为 `ip` / `user_agent` 增加定期清理任务（如 90 天）。
+- **回复**：v1.1 通过邮箱直接回复，不在站内做会话。
 
 ### 4.3 阅读次数
 
-v1.0 已可用：`articles.view_count` + 原子自增 + 前端去重 + IP 限流。
+v1.0 起已可用：`articles.view_count` + 原子自增 + 前端去重 + IP 限流。
 
 要进一步做准：
 
