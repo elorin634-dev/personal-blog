@@ -45,3 +45,16 @@ export function fetchContact() {
 export function createMessage({ name, email, content, website = '' }) {
   return http.post('/messages', { name, email, content, website });
 }
+
+/** 某篇文章的公开评论（仅 approved，按时间正序） */
+export function fetchComments(articleId, { page = 1, pageSize = 20 } = {}) {
+  return http.get(`/articles/${articleId}/comments`, { params: { page, pageSize } });
+}
+
+/**
+ * 提交匿名评论
+ * website 为蜜罐字段，正常用户不会填写
+ */
+export function createComment(articleId, { nickname, email, content, website = '' }) {
+  return http.post(`/articles/${articleId}/comments`, { nickname, email, content, website });
+}

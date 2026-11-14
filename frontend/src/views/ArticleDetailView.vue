@@ -6,6 +6,7 @@ import { useAsyncData } from '@/composables/useAsyncData';
 import { sanitizeHtml } from '@/utils/sanitize';
 import { formatCount, formatDateLong } from '@/utils/format';
 import StatusBlock from '@/components/StatusBlock.vue';
+import CommentSection from '@/components/CommentSection.vue';
 
 // 同一浏览器 24 小时内不重复计数，避免刷新页面把阅读数刷高
 const VIEW_DEDUPE_TTL = 24 * 60 * 60 * 1000;
@@ -100,6 +101,9 @@ async function registerView(current) {
           <p class="footer-note">如果这篇文章对你有帮助，欢迎把想法写给我。</p>
           <RouterLink to="/contact" class="btn btn-ghost">联系我 →</RouterLink>
         </footer>
+
+        <!-- v1.2 匿名评论：列表 + 提交，全部为纯文本渲染 -->
+        <CommentSection v-if="article.id" :article-id="article.id" />
       </article>
     </StatusBlock>
   </div>
