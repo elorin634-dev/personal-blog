@@ -13,6 +13,8 @@
   --line: #e5ded2;
   --accent: #c2542c;
   --accent-soft: rgba(194, 84, 44, 0.1);
+  --danger: #b23b2a;
+  --danger-soft: rgba(178, 59, 42, 0.12);
   --shadow-soft: 0 18px 40px -26px rgba(28, 26, 23, 0.4);
 
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
@@ -36,6 +38,8 @@
     --line: #302b24;
     --accent: #e07a4e;
     --accent-soft: rgba(224, 122, 78, 0.14);
+    --danger: #f0927c;
+    --danger-soft: rgba(240, 146, 124, 0.16);
     --shadow-soft: 0 18px 40px -26px rgba(0, 0, 0, 0.9);
 
     color-scheme: dark;

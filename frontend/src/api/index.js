@@ -37,3 +37,11 @@ export function increaseArticleView(id) {
 export function fetchContact() {
   return http.get('/contact');
 }
+
+/**
+ * 提交游客留言
+ * website 为蜜罐字段，正常用户不会填写
+ */
+export function createMessage({ name, email, content, website = '' }) {
+  return http.post('/messages', { name, email, content, website });
+}

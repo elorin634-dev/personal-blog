@@ -7,11 +7,13 @@
 import axios from 'axios';
 
 export class ApiRequestError extends Error {
-  constructor(message, { code = null, status = null } = {}) {
+  constructor(message, { code = null, status = null, details = null } = {}) {
     super(message);
     this.name = 'ApiRequestError';
     this.code = code;
     this.status = status;
+    // 字段级校验错误：{ name: '...', content: '...' }
+    this.details = details;
   }
 }
 
@@ -33,6 +35,7 @@ http.interceptors.response.use(
       new ApiRequestError(body?.message || '接口返回数据异常', {
         code: body?.code,
         status: response.status,
+        details: body?.data,
       })
     );
   },
@@ -53,7 +56,9 @@ http.interceptors.response.use(
       }
     }
 
-    return Promise.reject(new ApiRequestError(message, { code: body?.code, status }));
+    return Promise.reject(
+      new ApiRequestError(message, { code: body?.code, status, details: body?.data })
+    );
   }
 );
 
