@@ -119,19 +119,19 @@ ON DUPLICATE KEY UPDATE
 -- 站点配置：个人简介、联系板块、社交链接
 -- -------------------------------------------------------------
 INSERT INTO `site_config` (`config_key`, `config_value`) VALUES
-  ('site_title', '林间小站'),
+  ('site_title', 'Lin的小站'),
   ('site_description', '写代码，也写代码之外的事。'),
-  ('profile_name', '林知远'),
-  ('profile_role', '全栈开发 / 偏前端'),
-  ('profile_bio', '五年前端、两年 Node.js。喜欢把复杂交互拆成可预测的小块，也喜欢在周末骑车去没去过的街区。这里记录项目、踩坑和偶尔的胡思乱想。'),
-  ('profile_avatar_url', 'https://api.dicebear.com/7.x/notionists/svg?seed=linzhiyuan'),
-  ('profile_location', '中国 · 杭州'),
-  ('contact_email', 'hi@linzhiyuan.dev'),
-  ('contact_wechat', 'linzy_dev'),
+  ('profile_name', 'Elorin'),
+  ('profile_role', 'AI全栈开发'),
+  ('profile_bio', '学习中。喜欢把复杂交互拆成可预测的小块，也喜欢在周末骑车去没去过的街区。这里记录项目、踩坑和偶尔的胡思乱想。'),
+  ('profile_avatar_url', 'https://api.dicebear.com/7.x/notionists/svg?seed=elorin'),
+  ('profile_location', '中国 · 郑州'),
+  ('contact_email', 'elorin634@gmail.com'),
+  ('contact_wechat', 'elorin'),
   ('contact_note', '邮件通常 1-2 天内回复；技术问题欢迎附上复现步骤，沟通效率会高很多。'),
-  ('social_github', 'https://github.com/example'),
-  ('social_zhihu', 'https://www.zhihu.com/people/example'),
-  ('social_x', 'https://x.com/example'),
-  ('footer_text', '© 2026 林间小站 · 由 Vue 3 与 Express 驱动')
+  ('social_github', 'https://github.com/elorin634-dev'),
+  ('social_zhihu', 'https://www.zhihu.com/people/elorin634'),
+  ('social_x', 'https://x.com/elorin634'),
+  ('footer_text', '© 2026 Lin的小站 · 由 Vue 3 与 Express 驱动')
 ON DUPLICATE KEY UPDATE
   `config_value` = VALUES(`config_value`);
