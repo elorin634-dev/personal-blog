@@ -6,6 +6,7 @@ const homeRoutes = require('./home.routes');
 const projectRoutes = require('./project.routes');
 const articleRoutes = require('./article.routes');
 const contactRoutes = require('./contact.routes');
+const messageRoutes = require('./message.routes');
 
 const router = express.Router();
 
@@ -17,6 +18,7 @@ router.get('/', (req, res) => {
     data: {
       name: 'personal-blog-api',
       version: 'v1',
+      appVersion: '1.1.0',
       endpoints: [
         'GET /api/v1/health',
         'GET /api/v1/home',
@@ -26,11 +28,11 @@ router.get('/', (req, res) => {
         'GET /api/v1/articles/:slug',
         'POST /api/v1/articles/:id/view',
         'GET /api/v1/contact',
+        'POST /api/v1/messages',
       ],
       reservedEndpoints: [
         'GET /api/v1/articles/:id/comments',
         'POST /api/v1/articles/:id/comments',
-        'POST /api/v1/messages',
       ],
     },
   });
@@ -41,9 +43,9 @@ router.use('/home', homeRoutes);
 router.use('/projects', projectRoutes);
 router.use('/articles', articleRoutes);
 router.use('/contact', contactRoutes);
+router.use('/messages', messageRoutes);
 
-// 预留接口（v1.0 不实现，设计见 docs/api.md）：
+// 预留接口（v1.1 仍未实现，设计见 docs/api.md）：
 // router.use('/articles/:id/comments', commentRoutes)
-// router.use('/messages', messageRoutes)
 
 module.exports = router;

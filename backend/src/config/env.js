@@ -52,6 +52,12 @@ const config = {
     windowMs: optionalInt('VIEW_RATE_WINDOW_MS', 60 * 1000),
     max: optionalInt('VIEW_RATE_MAX', 30),
   },
+
+  // 游客留言：默认每 IP 每小时 3 条，够正常沟通，也能挡住脚本刷屏
+  messageRateLimit: {
+    windowMs: optionalInt('MESSAGE_RATE_WINDOW_MS', 60 * 60 * 1000),
+    max: optionalInt('MESSAGE_RATE_MAX', 3),
+  },
 };
 
 // 生产环境不允许通配符跨域，避免配置事故
