@@ -11,6 +11,13 @@ const MESSAGE_LIMITS = {
   contentMax: 1000,
 };
 
+const COMMENT_LIMITS = {
+  nicknameMin: 2,
+  nicknameMax: 30,
+  contentMin: 1,
+  contentMax: 500,
+};
+
 /**
  * 校验 :slug 路径参数，非法格式直接 400，避免把脏值送进 SQL
  */
@@ -86,4 +93,90 @@ function validateMessagePayload(req, res, next) {
   return next();
 }
 
-module.exports = { validateSlugParam, validatePaginationQuery, validateMessagePayload, MESSAGE_LIMITS };
+/**
+ * 校验数字 ID 路径参数（评论接口用）
+ */
+function validateNumericIdParam(paramName = 'id') {
+  return function numericIdGuard(req, res, next) {
+    const raw = req.params[paramName];
+    if (!/^\d+$/.test(String(raw || ''))) {
+      return next(ApiError.badRequest(`${paramName} 必须是正整数`));
+    }
+    const value = Number.parseInt(raw, 10);
+    if (!Number.isSafeInteger(value) || value < 1) {
+      return next(ApiError.badRequest(`${paramName} 必须是正整数`));
+    }
+    return next();
+  };
+}
+
+/** 评论列表分页：默认每页 20 条 */
+function validateCommentPagination(req, res, next) {
+  try {
+    req.pagination = parsePagination(req.query, { defaultPageSize: 20, maxPageSize: 50 });
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * 校验匿名评论
+ * - nickname / content 必填，email 选填
+ * - 蜜罐字段 website 有值视为机器人，交由 controller 返回假成功、不入库
+ * - 评论内容按纯文本保存，前端必须用文本插值渲染
+ */
+function validateCommentPayload(req, res, next) {
+  const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+
+  const honeypot = typeof body.website === 'string' ? body.website.trim() : '';
+  if (honeypot) {
+    req.comment = { isBot: true, nickname: '', email: '', content: '' };
+    return next();
+  }
+
+  const nickname = normalizeText(body.nickname, { singleLine: true });
+  const email = normalizeText(body.email, { singleLine: true }).toLowerCase();
+  const content = normalizeText(body.content);
+
+  const details = {};
+  const nicknameSize = textLength(nickname);
+  const contentSize = textLength(content);
+
+  if (nicknameSize < COMMENT_LIMITS.nicknameMin || nicknameSize > COMMENT_LIMITS.nicknameMax) {
+    details.nickname = `昵称需为 ${COMMENT_LIMITS.nicknameMin}-${COMMENT_LIMITS.nicknameMax} 个字符`;
+  }
+  if (email && !isEmail(email)) {
+    details.email = '邮箱格式不正确';
+  }
+  if (contentSize < COMMENT_LIMITS.contentMin) {
+    details.content = '评论内容不能为空';
+  } else if (contentSize > COMMENT_LIMITS.contentMax) {
+    details.content = `评论内容不能超过 ${COMMENT_LIMITS.contentMax} 个字符`;
+  }
+
+  if (Object.keys(details).length > 0) {
+    return next(ApiError.badRequest('请检查填写内容', details));
+  }
+
+  req.comment = {
+    nickname,
+    email,
+    content,
+    isBot: false,
+    ip: String(req.ip || '').slice(0, 45),
+    userAgent: String(req.get('user-agent') || '').slice(0, 500),
+  };
+  return next();
+}
+
+module.exports = {
+  validateSlugParam,
+  validatePaginationQuery,
+  validateMessagePayload,
+  validateNumericIdParam,
+  validateCommentPagination,
+  validateCommentPayload,
+  MESSAGE_LIMITS,
+  COMMENT_LIMITS,
+};

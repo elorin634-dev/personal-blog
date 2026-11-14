@@ -1,5 +1,5 @@
 -- =============================================================
--- 个人博客 v1.0 数据库结构
+-- 个人博客 v1.2 数据库结构
 -- MySQL 8.0+ / utf8mb4
 -- 使用方法：mysql -u root -p < database/schema.sql
 -- =============================================================
@@ -53,7 +53,7 @@ CREATE TABLE `articles` (
   `cover_url`    VARCHAR(500)  NOT NULL DEFAULT ''     COMMENT '封面图地址',
   `tags`         VARCHAR(255)  NOT NULL DEFAULT ''     COMMENT '标签，英文逗号分隔',
   `status`       ENUM('published','draft') NOT NULL DEFAULT 'draft' COMMENT '发布状态',
-  -- view_count 为「阅读次数统计」预留：v1.0 只展示 + 提供 +1 接口
+  -- view_count 为「阅读次数统计」预留：v1.0 起展示，并提供原子 +1 接口
   `view_count`   INT UNSIGNED  NOT NULL DEFAULT 0      COMMENT '阅读次数',
   `published_at` DATETIME      NULL DEFAULT NULL       COMMENT '发布时间，NULL 表示未发布',
   `created_at`   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -80,16 +80,18 @@ CREATE TABLE `site_config` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='站点配置';
 
 -- -------------------------------------------------------------
--- 4. comments 游客评论表（v1.0 仅建表，不开放写入接口）
+-- 4. comments 游客评论表（v1.2 启用读写）
 --    设计说明：无登录体系，status 为审核状态，默认 pending
 -- -------------------------------------------------------------
 CREATE TABLE `comments` (
   `id`         INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `article_id` INT UNSIGNED NOT NULL COMMENT '所属文章',
+  -- v1.2 预留：后续支持楼中楼时使用，当前始终为 NULL
+  `parent_id`  INT UNSIGNED NULL DEFAULT NULL COMMENT '父评论 id（预留，v1.2 不启用）',
   `nickname`   VARCHAR(60)  NOT NULL              COMMENT '游客昵称',
   `email`      VARCHAR(190) NOT NULL DEFAULT ''   COMMENT '邮箱，仅站主可见，不公开展示',
   `content`    TEXT         NOT NULL              COMMENT '评论内容（纯文本）',
-  `status`     ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending' COMMENT '审核状态',
+  `status`     ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending' COMMENT '审核状态；v1.2 接口写入 approved',
   `ip`         VARCHAR(45)  NOT NULL DEFAULT ''   COMMENT '来源 IP（IPv6 最长 45）',
   `user_agent` VARCHAR(500) NOT NULL DEFAULT ''   COMMENT '浏览器 UA',
   `created_at` TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -97,13 +99,14 @@ CREATE TABLE `comments` (
   KEY `idx_comments_article` (`article_id`),
   -- 详情页读取：某篇文章下已审核评论，按时间正序
   KEY `idx_comments_article_status_created` (`article_id`, `status`, `created_at`),
+  KEY `idx_comments_parent` (`parent_id`),
   CONSTRAINT `fk_comments_article`
     FOREIGN KEY (`article_id`) REFERENCES `articles` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='游客评论（预留）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='游客评论（v1.2 启用）';
 
 -- -------------------------------------------------------------
--- 5. messages 游客留言表（v1.0 仅建表，不开放写入接口）
+-- 5. messages 游客留言表（v1.1 启用写入，前台不展示）
 -- -------------------------------------------------------------
 CREATE TABLE `messages` (
   `id`         INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -116,4 +119,4 @@ CREATE TABLE `messages` (
   `created_at` TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_messages_status_created` (`status`, `created_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='游客留言（预留）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='游客留言（v1.1 启用，前台不展示）';

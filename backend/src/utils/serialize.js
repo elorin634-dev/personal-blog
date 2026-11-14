@@ -71,10 +71,24 @@ function serializeArticleDetail(row) {
   };
 }
 
+/**
+ * 公开评论字段：只暴露展示所需内容
+ * email / ip / user_agent / status 一律不返回
+ */
+function serializeComment(row) {
+  return {
+    id: row.id,
+    nickname: row.nickname,
+    content: row.content,
+    createdAt: row.created_at,
+  };
+}
+
 module.exports = {
   splitCommaList,
   estimateReadingMinutes,
   serializeProject,
   serializeArticleListItem,
   serializeArticleDetail,
+  serializeComment,
 };

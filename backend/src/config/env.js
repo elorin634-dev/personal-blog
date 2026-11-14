@@ -58,6 +58,12 @@ const config = {
     windowMs: optionalInt('MESSAGE_RATE_WINDOW_MS', 60 * 60 * 1000),
     max: optionalInt('MESSAGE_RATE_MAX', 3),
   },
+
+  // 匿名评论：默认每 IP 10 分钟 5 条；评论即时展示，限流是主要防刷手段
+  commentRateLimit: {
+    windowMs: optionalInt('COMMENT_RATE_WINDOW_MS', 10 * 60 * 1000),
+    max: optionalInt('COMMENT_RATE_MAX', 5),
+  },
 };
 
 // 生产环境不允许通配符跨域，避免配置事故

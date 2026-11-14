@@ -7,6 +7,7 @@ const projectRoutes = require('./project.routes');
 const articleRoutes = require('./article.routes');
 const contactRoutes = require('./contact.routes');
 const messageRoutes = require('./message.routes');
+const commentRoutes = require('./comment.routes');
 
 const router = express.Router();
 
@@ -18,7 +19,7 @@ router.get('/', (req, res) => {
     data: {
       name: 'personal-blog-api',
       version: 'v1',
-      appVersion: '1.1.0',
+      appVersion: '1.2.0',
       endpoints: [
         'GET /api/v1/health',
         'GET /api/v1/home',
@@ -27,13 +28,12 @@ router.get('/', (req, res) => {
         'GET /api/v1/articles?page=1&pageSize=10',
         'GET /api/v1/articles/:slug',
         'POST /api/v1/articles/:id/view',
+        'GET /api/v1/articles/:id/comments?page=1&pageSize=20',
+        'POST /api/v1/articles/:id/comments',
         'GET /api/v1/contact',
         'POST /api/v1/messages',
       ],
-      reservedEndpoints: [
-        'GET /api/v1/articles/:id/comments',
-        'POST /api/v1/articles/:id/comments',
-      ],
+      reservedEndpoints: [],
     },
   });
 });
@@ -41,11 +41,10 @@ router.get('/', (req, res) => {
 router.use('/health', healthRoutes);
 router.use('/home', homeRoutes);
 router.use('/projects', projectRoutes);
+// 评论路由必须挂在 /articles 之前，复用 /articles/:id/comments 两级路径
+router.use('/articles/:id/comments', commentRoutes);
 router.use('/articles', articleRoutes);
 router.use('/contact', contactRoutes);
 router.use('/messages', messageRoutes);
-
-// 预留接口（v1.1 仍未实现，设计见 docs/api.md）：
-// router.use('/articles/:id/comments', commentRoutes)
 
 module.exports = router;
