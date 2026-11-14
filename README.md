@@ -1,6 +1,6 @@
-# 个人博客（v1.1）
+# 个人博客（v1.2）
 
-一个前后端分离的个人博客：主页展示简介与精选内容，项目与文章各自有列表和详情，联系页读取站点配置并支持**游客留言**。v1.1 在 v1.0 的展示能力上增加了无需登录的留言提交，留言只入库待审核，不公开展示；仍然不包含登录、鉴权与后台管理。
+一个前后端分离的个人博客：主页展示简介与精选内容，项目与文章各自有列表和详情，联系页支持游客留言，文章详情页支持**匿名评论互动**。v1.2 在 v1.1 的留言能力上增加了无需登录的评论浏览与提交，评论默认 `approved` 并即时展示；仍不包含登录、鉴权与后台管理。
 
 - 前端：Vue 3 + Vite + Vue Router + Axios + Pinia
 - 后端：Node.js + Express + mysql2（`mysql2/promise`）
@@ -11,18 +11,19 @@
 
 ## 1. 功能范围
 
-| 板块 | v1.1 已实现 |
+| 板块 | v1.2 已实现 |
 | --- | --- |
 | 主页 `/` | 个人简介、社交链接、精选项目（3 个）、最新文章（5 篇）、统计、联系入口 |
 | 项目 `/projects` | 已发布项目列表；`/projects/:slug` 展示详情、技术栈、仓库/演示链接 |
 | 文章 `/articles` | 已发布文章分页列表；`/articles/:slug` 展示正文、标签、阅读数 |
+| 评论 | 文章详情页展示已审核评论（分页）；游客可匿名提交，默认 `approved` 即时展示 |
 | 联系 `/contact` | 展示邮箱、微信、坐标、社交链接；提供无需登录的留言表单 |
 | 留言 | `POST /api/v1/messages` 写入 `messages`，默认 `status = 'pending'`，不提供前台列表与审核页面 |
 | 其他 | 移动端响应式导航、404 页面、加载骨架、错误重试、深色模式跟随系统 |
 
-**不在 v1.1 范围**：登录/注册/鉴权、后台管理、留言列表与审核界面、文章评论提交、图片上传、富文本编辑器、RSS、全文搜索、Docker。
+**不在 v1.2 范围**：登录/注册/鉴权、后台管理、评论回复/嵌套、点赞、举报、删除、编辑、留言列表与审核界面、图片上传、富文本编辑器、RSS、全文搜索、Docker。
 
-留言的**写入链路已实现**，展示与审核仍是预留能力；评论与阅读次数统计的扩展点继续保留，见 [docs/database.md](docs/database.md) 与 [docs/api.md](docs/api.md)。
+评论已实现“提交 + 公开列表”，`pending` / `rejected` 状态与 `parent_id` 字段为后续审核、楼中楼预留；留言仍保持入库待审核、不在前台展示。设计见 [docs/database.md](docs/database.md) 与 [docs/api.md](docs/api.md)。
 
 ---
 
@@ -47,7 +48,7 @@
 │   ├── src
 │   │   ├── api             # Axios 实例与接口函数
 │   │   ├── assets/styles   # 设计令牌与全局样式
-│   │   ├── components      # 导航、页脚、卡片、分页、状态块
+│   │   ├── components      # 导航、页脚、卡片、分页、评论区、状态块
 │   │   ├── composables     # useAsyncData
 │   │   ├── layouts         # DefaultLayout
 │   │   ├── router          # 路由与 404
@@ -61,6 +62,8 @@
 │   ├── vite.config.js
 │   └── package.json
 ├── database
+│   ├── migrations
+│   │   └── v1.2.0_comments_parent_id.sql  # 已有库升级用（幂等）
 │   ├── schema.sql          # 建库建表（可重复执行，会清空数据）
 │   └── seed.sql            # 种子数据（UPSERT，可重复执行）
 ├── docs
@@ -96,6 +99,21 @@ mysql -u root -p -e "USE personal_blog;
 ```
 
 > `schema.sql` 会 `DROP TABLE` 后重建，**会清空已有数据**，只用于本地开发。
+
+#### 已有数据库升级（v1.0 / v1.1 → v1.2）
+
+不需要重跑 `schema.sql`。执行一次迁移脚本，为 `comments` 增加预留字段 `parent_id` 与索引（脚本幂等，可重复执行）：
+
+```bash
+mysql -u root -p < database/migrations/v1.2.0_comments_parent_id.sql
+
+# 验证：应看到 parent_id 字段
+mysql -u root -p -e "USE personal_blog; SHOW COLUMNS FROM comments LIKE 'parent_id';"
+```
+
+本次迁移**不修改现有数据**，也不改变 `messages` 表的留言逻辑。全新安装直接执行上面的 `schema.sql` + `seed.sql` 即可，无需迁移。
+
+> 未执行迁移时，`POST /articles/:id/comments` 会因缺少 `parent_id` 列而失败（500）。请先迁移，再重启 v1.2 后端。
 
 ### 3.3 启动后端
 
@@ -156,6 +174,8 @@ npm run dev
 | `VIEW_RATE_MAX` | 否 | 30 | 窗口内最大请求数 |
 | `MESSAGE_RATE_WINDOW_MS` | 否 | 3600000 | 留言接口限流窗口（默认 1 小时） |
 | `MESSAGE_RATE_MAX` | 否 | 3 | 窗口内最多留言条数 |
+| `COMMENT_RATE_WINDOW_MS` | 否 | 600000 | 评论接口限流窗口（默认 10 分钟） |
+| `COMMENT_RATE_MAX` | 否 | 5 | 窗口内最多评论条数 |
 
 ### 前端 `frontend/.env`
 
@@ -181,10 +201,12 @@ npm run dev
 | GET | `/articles?page=1&pageSize=10` | 文章分页列表（仅已发布） |
 | GET | `/articles/:slug` | 文章详情 |
 | POST | `/articles/:id/view` | 阅读次数 +1（原子更新） |
+| GET | `/articles/:id/comments?page=1&pageSize=20` | 公开评论列表（仅 approved） |
+| POST | `/articles/:id/comments` | 提交匿名评论（默认 approved，即时展示） |
 | GET | `/contact` | 联系板块配置 |
 | POST | `/messages` | 提交游客留言（限流 + 蜜罐，写入待审核） |
 
-预留但未实现：`GET/POST /articles/:id/comments`。留言的完整字段、错误码与预留接口的校验规则见 **[docs/api.md](docs/api.md)**。
+评论与留言的完整字段、错误码与校验规则见 **[docs/api.md](docs/api.md)**。管理端审核接口尚未实现。
 
 ---
 
@@ -252,6 +274,16 @@ git commit -m "feat(frontend): 联系页接入留言表单"
 git add README.md docs
 git commit -m "docs: 更新 v1.1 留言功能说明"
 git tag v1.1.0
+
+# v1.2 匿名评论
+git checkout -b feat/v1.2-article-comments
+git add database backend/src
+git commit -m "feat(comments): 新增评论读写接口与 parent_id 迁移"
+git add frontend/src
+git commit -m "feat(frontend): 文章详情页接入匿名评论"
+git add README.md docs
+git commit -m "docs: 更新 v1.2 评论功能说明"
+git tag v1.2.0
 ```
 
 ---
@@ -261,17 +293,18 @@ git tag v1.1.0
 | 风险 | 措施 |
 | --- | --- |
 | SQL 注入 | 全部查询走 `pool.execute(sql, params)` 参数化；唯一拼接的 `LIMIT` 值先收敛为 1–50 的整数；连接池关闭 `multipleStatements` |
-| 输入校验 | `slug` 正则白名单、分页参数正整数校验、文章 id 校验；留言的昵称/邮箱/内容长度与格式校验，越界 `pageSize` 直接拒绝 |
+| 输入校验 | `slug` 正则白名单、分页参数正整数校验、文章 id 校验；留言/评论的昵称、邮箱、内容长度与格式校验，越界 `pageSize` 直接拒绝 |
 | 统一错误处理 | `ApiError` + 错误中间件；数据库错误映射为可读信息；生产环境不返回堆栈与 SQL |
-| XSS | 正文以简单 HTML 存储，前端渲染前用 `utils/sanitize.js` 做**标签/属性白名单**清洗（DOMParser 建树，移除 `script`/`iframe`/事件属性，校验链接协议）；后端不返回草稿；留言按**纯文本**入库，后续展示必须使用文本插值或转义 |
+| XSS | 正文以简单 HTML 存储，前端渲染前用 `utils/sanitize.js` 做**标签/属性白名单**清洗（DOMParser 建树，移除 `script`/`iframe`/事件属性，校验链接协议）；留言与评论按**纯文本**存储，前端用文本插值渲染，绝不使用 `v-html` |
 | CORS | 仅放行 `CORS_ORIGIN` 配置的来源，生产禁止 `*` |
 | 其他响应头 | `helmet` 提供 `nosniff`、`frameguard` 等基础头；关闭 `x-powered-by` |
 | 请求体过大 | `express.json({ limit: '100kb' })` |
 | 阅读数刷量 | 后端按 IP 限流 + 数据库原子自增 + 前端 24h 去重（非严格统计） |
 | 留言刷屏 | 按 IP 限流（默认 3 条/小时）+ 隐藏蜜罐字段 + 入库 `pending` 人工审核 + 不提供公开列表接口（无 CSRF 风险，因为不涉及登录态操作） |
+| 评论刷屏 | 评论即时公开，按 IP 限流（默认 5 条/10 分钟）+ 隐藏蜜罐字段；公开列表只查 `approved`，且只返回 `id/nickname/content/created_at` |
 | 敏感配置 | `.env` 不入库，仅提交 `.env.example` |
 
-**已知边界**：XSS 清洗在客户端执行，属于纵深防御；v1.1 唯一的写入接口是游客留言，内容以纯文本存储且不回显，风险面有限。后续实现评论或留言展示时，输出端必须转义，不能直接拼 HTML。
+**已知边界**：XSS 清洗在客户端执行，属于纵深防御。v1.2 的评论默认自动通过并立即公开，是「即时互动」与「内容安全」之间的取舍：目前依靠限流 + 蜜罐 + 500 字上限控制风险。若垃圾评论增多，把 `commentService.js` 的 `SUBMIT_STATUS` 改为 `'pending'` 并配合管理端审核即可，表结构无需改动。评论内容以纯文本存储，任何展示场景都必须使用文本插值或转义，不能直接拼 HTML。
 
 ---
 
@@ -282,16 +315,20 @@ git tag v1.1.0
 1. **单作者博客**，无多用户、无登录、无后台；内容通过 SQL 导入维护。
 2. 数据库名使用 `personal_blog`；脚本与 `.env.example` 保持一致。
 3. 正文是「半可信」的简单 HTML（站主撰写或经审核转载），因此允许有限标签；不使用 Markdown 解析与富文本编辑器。
-4. 标签与技术栈使用逗号分隔字符串，v1.1 不做按标签筛选。
+4. 标签与技术栈使用逗号分隔字符串，v1.2 不做按标签筛选。
 5. 项目数量较少，`GET /projects` 一次性返回全部已发布项目，不分页。
-6. `pageSize` 默认 10、上限 50；文章列表前端使用 6。
+6. `pageSize` 默认 10、上限 50；文章列表前端使用 6，评论列表默认 20。
 7. 阅读数去重采用「同一浏览器 24 小时」，仅用于展示，不作为精确统计。
 8. 图片只存 URL（`cover_url` / `avatar_url`），不做上传与裁剪。
 9. 时间按服务器本地时区返回 `YYYY-MM-DD HH:mm:ss`；如需跨时区，后续统一改为 UTC + 前端格式化。
 10. 部署形态为「静态前端 + Node 进程 + 独立 MySQL」，不使用 Docker。
 11. 留言只需「能提交并入库」：不提供公开列表、不做邮件通知、不做后台审核页面；审核由站主直接操作数据库完成。
-12. 昵称 2–30 字、内容 5–1000 字；邮箱选填但填写后必须格式合法，且不会对外展示。
+12. 留言昵称 2–30 字、内容 5–1000 字；邮箱选填但填写后必须格式合法，且不会对外展示。
 13. 留言限流基于进程内存，重启后计数清零；单实例部署足够，多实例部署需改为 Redis 等共享存储。
+14. 评论为「即时互动」：v1.2 提交即写入 `approved` 并立即展示；表默认值仍保留 `pending`（安全默认），后续开启审核只需调整 `commentService.js` 的 `SUBMIT_STATUS`。
+15. 评论昵称 2–30 字、内容 1–500 字，邮箱选填；公开列表每页 20 条，按时间正序。
+16. `comments.parent_id` 已预留但 v1.2 始终写入 `NULL`，不支持回复/嵌套。
+17. 评论限流同样基于进程内存，默认每 IP 10 分钟 5 条。
 
 ### 8.2 后续计划
 
@@ -300,19 +337,25 @@ git tag v1.1.0
 - `POST /api/v1/messages`、联系页留言表单、`pending` 入库。
 - IP 限流 + 蜜罐字段 + 字段级校验；不提供前台列表与审核页面。
 
-**v1.2 — 评论与审核**
+**v1.2 — 匿名评论（已完成）**
 
-- 实现 `GET/POST /articles/:id/comments`。
-- 留言与评论的审核界面（独立管理端 + 鉴权），或先提供受保护的 CLI/脚本。
-- 评论分页、反垃圾策略增强（关键词、频控）。
+- `GET/POST /articles/:id/comments`、文章详情页评论列表与表单。
+- 提交即 `approved` 并即时展示；公开列表只返回非敏感字段。
+- `parent_id` 预留；IP 限流 + 蜜罐 + 字段校验。
 
-**v1.3 — 统计与内容组织**
+**v1.3 — 审核与互动扩展**
+
+- 管理端审核界面（独立管理端 + 鉴权），支持把 `SUBMIT_STATUS` 切回 `pending`。
+- 留言 `read/archived` 状态管理；评论 `rejected` 处理。
+- 楼中楼回复（使用 `parent_id`）、点赞、举报；评论游标分页。
+
+**v1.4 — 统计与内容组织**
 
 - `article_views` 表做服务端阅读去重；热门文章排序。
 - 标签聚合页 `/tags/:tag`；文章上一篇/下一篇。
 - RSS、sitemap、Open Graph 元信息。
 
-**v1.4 — 工程化**
+**v1.5 — 工程化**
 
 - 后端单元/接口测试（Vitest + Supertest），前端组件测试。
 - ESLint + Prettier + CI（lint / test / build）。
@@ -351,6 +394,12 @@ git tag v1.1.0
 | 18 | 留言校验 | 提交 1 字昵称 / 非法邮箱 / 4 字内容 | `400`，`code: 40000`，`data` 含对应字段错误 |
 | 19 | 留言限流 | 同一 IP 连续提交超过 `MESSAGE_RATE_MAX` 条 | 超出后返回 `429`，`code: 42900` |
 | 20 | 留言不公开 | 检查前台页面与接口清单 | 没有留言列表，也没有 `GET /messages` |
+| 21 | 评论列表 | 访问任一文章详情页 | 展示 `approved` 评论，按时间正序，分页加载 |
+| 22 | 提交评论 | 填写昵称与内容并提交 | `201`，评论立即出现在列表；库中 `status='approved'`、`parent_id=NULL` |
+| 23 | 评论敏感字段 | 检查 `GET /articles/:id/comments` 响应 | 只有 `id/nickname/content/createdAt`，无 `email/ip/user_agent/status` |
+| 24 | 评论校验 | 提交 1 字昵称 / 非法邮箱 / 空内容 / 501 字 | `400`，`code: 40000`，`data` 含字段错误 |
+| 25 | 评论限流 | 同一 IP 连续提交超过 `COMMENT_RATE_MAX` 条 | 超出后 `429`，`code: 42900` |
+| 26 | 评论与草稿隔离 | `GET /articles/6/comments`（草稿文章） | `404`，`code: 40400` |
 
 ---
 
@@ -378,11 +427,31 @@ MySQL 未启动、端口不对，或 `.env` 中账号密码错误。先确认 `m
 
 **留言提交成功，但前台看不到**
 
-这是 v1.1 的预期行为：留言只入库待审核，不提供前台列表。查看数据：
+这是留言功能的预期行为（v1.1 起）：留言只入库待审核，不提供前台列表。查看数据：
 
 ```bash
 mysql -u root -p -e "USE personal_blog; SELECT id,name,email,status,created_at FROM messages ORDER BY id DESC LIMIT 10;"
 ```
+
+**评论提交后提示「评论太频繁了」**
+
+触发了按 IP 限流（默认 5 条/10 分钟）。等待窗口结束，或调整 `COMMENT_RATE_MAX` / `COMMENT_RATE_WINDOW_MS` 后重启后端。
+
+**评论提交成功但列表里没有**
+
+先确认没有触发限流；v1.2 提交即 `approved`，刷新页面应能看到。如果数据库中是 `pending`，检查 `backend/src/services/commentService.js` 的 `SUBMIT_STATUS` 是否被改过。
+
+**已有数据库报 `Unknown column 'parent_id' in 'field list'`**
+
+没有执行 v1.2 迁移。运行：
+
+```bash
+mysql -u root -p < database/migrations/v1.2.0_comments_parent_id.sql
+```
+
+**评论邮箱会公开吗**
+
+不会。公开列表只查询 `id/nickname/content/created_at`，`email`、`ip`、`user_agent` 不会出现在接口响应或页面上。
 
 **刷新 `/articles/xxx` 在生产环境 404**
 

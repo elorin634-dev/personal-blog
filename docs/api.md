@@ -1,11 +1,11 @@
-# API 设计（v1.1）
+# API 设计（v1.2）
 
 - **Base URL**：`http://localhost:3000/api/v1`
 - **数据格式**：`application/json; charset=utf-8`
-- **鉴权**：v1.1 无登录、无鉴权。公开接口以只读为主，写入接口仅有阅读数 +1 与游客留言
+- **鉴权**：v1.2 无登录、无鉴权。公开接口以只读为主，写入接口有阅读数 +1、游客留言与匿名评论
 - **版本策略**：URL 前缀携带版本号。未来出现不兼容变更时新增 `/api/v2`，v1 保持至少一个版本的兼容期。
 
-> v1.1 变更：新增已实现的 `POST /api/v1/messages`（游客留言入库，不公开读取）；文章评论接口保持预留。
+> v1.2 变更：新增文章评论的公开列表与匿名提交（提交即 `approved` 并立即展示）；留言接口保持 v1.1 行为（`pending` 入库、不公开）。
 
 ---
 
@@ -73,10 +73,11 @@
 - CORS 仅放行 `CORS_ORIGIN` 中配置的来源（逗号分隔多个）。
 - `POST /articles/:id/view` 按 IP 限流，默认 60 秒 30 次（`VIEW_RATE_WINDOW_MS` / `VIEW_RATE_MAX`）。
 - `POST /messages` 按 IP 限流，默认 1 小时 3 次（`MESSAGE_RATE_WINDOW_MS` / `MESSAGE_RATE_MAX`）；计数存于进程内存，重启清零。
+- `POST /articles/:id/comments` 按 IP 限流，默认 10 分钟 5 次（`COMMENT_RATE_WINDOW_MS` / `COMMENT_RATE_MAX`）；同样存于进程内存。
 
 ---
 
-## 2. v1.1 已实现接口
+## 2. v1.2 已实现接口
 
 ### 2.1 健康检查
 
@@ -364,7 +365,117 @@ GET /api/v1/contact
 
 ---
 
-### 2.9 提交游客留言
+### 2.9 获取文章评论
+
+```
+GET /api/v1/articles/:id/comments?page=1&pageSize=20
+```
+
+- `:id` 必须是**已发布**文章，否则返回 `40400`。
+- 只返回 `status = 'approved'` 的评论，按 `created_at ASC, id ASC` 排序（对话顺序）。
+- 公开字段**只有** `id / nickname / content / createdAt`；`email`、`ip`、`user_agent`、`status` 一律不返回。
+- `pageSize` 默认 20、上限 50。
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "list": [
+      {
+        "id": 12,
+        "nickname": "路过的前端",
+        "content": "这个拆分思路很实用，准备照着改一版。",
+        "createdAt": "2026-11-14 21:30:00"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "pageSize": 20,
+      "total": 1,
+      "totalPages": 1
+    }
+  }
+}
+```
+
+---
+
+### 2.10 提交匿名评论
+
+```
+POST /api/v1/articles/:id/comments
+Content-Type: application/json
+```
+
+无登录、无鉴权。v1.2 提交后立即写入 `status = 'approved'` 并按时间顺序展示；`pending` / `rejected` 仍保留在表结构中，供后续审核扩展。
+
+**请求体**
+
+| 字段 | 类型 | 必填 | 规则 |
+| --- | --- | --- | --- |
+| `nickname` | string | 是 | 去首尾空白、压缩连续空白后 2–30 个字符 |
+| `email` | string | 否 | 合法邮箱，≤190 字符；统一转小写；仅站主可见 |
+| `content` | string | 是 | 去首尾空白后 1–500 个字符，保留换行，纯文本存储 |
+| `website` | string | 否 | 蜜罐字段。正常用户不填写；有值视为机器人，返回假成功但**不入库** |
+
+```json
+{
+  "nickname": "路过的前端",
+  "email": "reader@example.com",
+  "content": "这个拆分思路很实用，准备照着改一版。"
+}
+```
+
+**成功响应（201）**
+
+```json
+{
+  "code": 0,
+  "message": "评论已发布",
+  "data": {
+    "id": 12,
+    "nickname": "路过的前端",
+    "content": "这个拆分思路很实用，准备照着改一版。",
+    "createdAt": "2026-11-14 21:30:00"
+  }
+}
+```
+
+说明：
+
+- 响应不回显 `email` / `ip` / `user_agent`；`parent_id` 在 v1.2 固定为 `NULL`。
+- 蜜罐命中时同样返回 `201`，但 `data.id = 0`，不会产生数据库记录；前端不会把它追加到列表。
+- 限流：同一 IP 默认 10 分钟最多 5 条。
+- 评论内容按纯文本保存，前端使用文本插值渲染；任何后台展示也必须转义。
+
+**错误**
+
+| 场景 | HTTP | code | data |
+| --- | --- | --- | --- |
+| 字段缺失 / 长度不符 / 邮箱非法 | 400 | `40000` | 字段级错误，如 `{ "content": "评论内容不能为空" }` |
+| 文章不存在或未发布 | 404 | `40400` | `null` |
+| 文章 id 非正整数 | 400 | `40000` | `null` |
+| 同一 IP 超过限流阈值 | 429 | `42900` | `null`，响应头带 `Retry-After` |
+| 请求体超过 100kb | 413 | `41300` | `null` |
+| 数据库不可用 | 503 | `50300` | `null` |
+
+字段级错误示例：
+
+```json
+{
+  "code": 40000,
+  "message": "请检查填写内容",
+  "data": {
+    "nickname": "昵称需为 2-30 个字符",
+    "email": "邮箱格式不正确"
+  }
+}
+```
+
+---
+
+### 2.11 提交游客留言
 
 ```
 POST /api/v1/messages
@@ -431,7 +542,7 @@ Content-Type: application/json
 
 ---
 
-### 2.10 API 元信息
+### 2.12 API 元信息
 
 ```
 GET /api/v1
@@ -441,92 +552,24 @@ GET /api/v1
 
 ---
 
-## 3. 预留接口设计（v1.1 不实现）
+## 3. 后续接口设计（管理端，未实现）
 
-以下接口在 v1.1 **未挂载路由**，仅完成数据库表与文档设计。上线前需要补充：输入校验、限流、审核策略、隐私处理。
+v1.2 没有审核后台；评论即时公开，留言与评论的审核只能由站主直接操作数据库。
 
-### 3.1 获取文章评论
+### 3.1 审核接口（更后续）
 
-```
-GET /api/v1/articles/:id/comments?page=1&pageSize=20
-```
-
-**规则**
-
-- 仅返回 `status = 'approved'` 的评论，按 `created_at ASC` 排序（楼层顺序）。
-- `id` 必须是已发布文章，否则 `40400`。
-- **绝不返回** `email`、`ip`、`user_agent`。
-- `nickname` 在输出时做 HTML 转义；`content` 作为纯文本返回，前端用插值而非 `v-html`。
-
-**响应**
-
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "list": [
-      {
-        "id": 12,
-        "nickname": "路过的前端",
-        "content": "这个拆分思路很实用，准备照着改一版。",
-        "createdAt": "2026-11-01 10:22:00"
-      }
-    ],
-    "pagination": { "page": 1, "pageSize": 20, "total": 1, "totalPages": 1 }
-  }
-}
-```
-
-### 3.2 提交游客评论
-
-```
-POST /api/v1/articles/:id/comments
-Content-Type: application/json
-```
-
-**请求体**
-
-| 字段 | 类型 | 必填 | 规则 |
-| --- | --- | --- | --- |
-| `nickname` | string | 是 | 2–30 字符，去首尾空格，禁止纯空白 |
-| `email` | string | 否 | 合法邮箱，≤190 字符；仅站主可见 |
-| `content` | string | 是 | 1–500 字符，纯文本，后端做 HTML 转义 |
-| `website` | string | 否 | 蜜罐字段：非空则视为机器人，直接返回 201 但不入库 |
-
-**服务端处理**
-
-1. 校验文章存在且已发布。
-2. 限流：同一 IP 每小时最多 5 条（后续可换 Redis 计数）。
-3. `status` 固定写入 `pending`，需站主审核后才可展示。
-4. 记录 `ip`（取 `req.ip`，部署在代理后需设置 `TRUST_PROXY=1`）与截断到 500 字符的 `user_agent`。
-5. 内容按纯文本存储，**不做** Markdown 解析。
-
-**响应（201）**
-
-```json
-{
-  "code": 0,
-  "message": "评论已提交，审核通过后展示",
-  "data": { "id": 13, "status": "pending" }
-}
-```
-
-**错误**
-
-| 场景 | code | HTTP |
-| --- | --- | --- |
-| 字段缺失/超长/邮箱非法 | `40000` | 400 |
-| 文章不存在 | `40400` | 404 |
-| 频率超限 | `42900` | 429 |
-
-### 3.3 审核接口（更后续）
-
-后台管理不在 v1.1 范围内。留言目前只能由站主直接操作数据库处理：
+后台管理不在 v1.2 范围内。留言目前只能由站主直接操作数据库处理：
 
 ```sql
 UPDATE messages SET status = 'read' WHERE id = ?;      -- 已读
 UPDATE messages SET status = 'archived' WHERE id = ?;  -- 归档
+```
+
+评论的审核状态同样可直接改库（v1.2 默认不经过 pending）：
+
+```sql
+UPDATE comments SET status = 'rejected' WHERE id = ?;  -- 隐藏
+UPDATE comments SET status = 'approved' WHERE id = ?;  -- 恢复展示
 ```
 
 若后续要做管理端，建议：
@@ -550,9 +593,16 @@ UPDATE messages SET status = 'archived' WHERE id = ?;  -- 归档
 
 ### 4.2 评论
 
-- 分页改游标（`before_id`）以适应长列表。
-- 增加 `parent_id` 支持楼中楼；增加 `like_count`。
-- 反垃圾：蜜罐字段 + 频率限制 + 关键词过滤 + 人工审核。
+v1.2 已完成公开列表与匿名提交：提交即 `approved` 并立即展示，公开列表只查 `approved` 且只返回四个展示字段。
+
+后续可扩展：
+
+- **审核模式**：把 `commentService.js` 的 `SUBMIT_STATUS` 改为 `'pending'`，配合管理端审核；表结构与列表查询无需改动。
+- **游标分页**：评论量大时把 `page/offset` 改为 `before_id`，避免深分页。
+- **楼中楼**：使用已预留的 `parent_id`，服务端需校验父评论属于同一文章，并限制嵌套层级；v1.2 始终为 `NULL`。
+- **互动能力**：点赞（`like_count`）、举报（独立表）、删除/编辑（需要鉴权）。
+- **反垃圾**：当前为 IP 限流 + 蜜罐 + 500 字上限；量级上升后增加关键词过滤、重复内容检测或第三方风控。
+- **隐私留存**：`ip` / `user_agent` 建议保留 90 天后清空，导出时脱敏。
 
 ### 4.3 留言
 

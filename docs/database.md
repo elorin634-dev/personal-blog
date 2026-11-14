@@ -1,11 +1,11 @@
-# 数据库设计（v1.1）
+# 数据库设计（v1.2）
 
 - **数据库**：MySQL 8.0+
 - **字符集 / 排序规则**：`utf8mb4` / `utf8mb4_0900_ai_ci`（支持 emoji 与多语言，大小写不敏感）
 - **存储引擎**：InnoDB（事务、行锁、外键）
-- **脚本**：`database/schema.sql`（结构）、`database/seed.sql`（种子数据）
+- **脚本**：`database/schema.sql`（结构）、`database/seed.sql`（种子数据）、`database/migrations/`（存量库升级）
 
-> v1.1 变更：启用 `messages` 表的写入（游客留言）。**无需修改表结构**，v1.0 已预留该表；`comments` 与阅读次数扩展点保持不变。
+> v1.2 变更：启用 `comments` 表的读写，并新增预留字段 `parent_id`（为楼中楼准备，当前始终为 `NULL`）。已有 v1.0 / v1.1 数据库需执行 `database/migrations/v1.2.0_comments_parent_id.sql`；`messages` 表逻辑不变。
 
 ---
 
@@ -57,6 +57,7 @@ erDiagram
     comments {
         int id PK
         int article_id FK
+        int parent_id "预留，v1.2 不启用"
         varchar nickname
         varchar email
         text content
@@ -78,7 +79,7 @@ erDiagram
     }
 ```
 
-`comments` 是 v1.0 唯一带外键的表：`comments.article_id → articles.id`，`ON DELETE CASCADE`，删除文章时评论一并清理。
+`comments` 是当前唯一带外键的表：`comments.article_id → articles.id`，`ON DELETE CASCADE`，删除文章时评论一并清理。`parent_id` v1.2 不加外键，避免在未启用嵌套前引入额外约束；后续实现楼中楼时再评估是否加自引用外键。
 
 ---
 
@@ -160,26 +161,49 @@ v1.0 的标签只用于展示，没有按标签筛选或统计的需求。用逗
 
 **设计理由**：联系方式属于「会变但不常变」的配置，用 K/V 表可在不改代码、不改表结构的情况下调整。代价是类型弱、无法约束，因此后端在 `configService` 中集中做字段映射与默认值处理。
 
-### 2.4 comments（v1.1 仍仅建表）
+### 2.4 comments（v1.2 启用读写）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | INT UNSIGNED | 主键 |
 | `article_id` | INT UNSIGNED | 外键 → `articles.id`，`ON DELETE CASCADE` |
-| `nickname` | VARCHAR(60) | 游客昵称 |
-| `email` | VARCHAR(190) | 可选，**不对外返回** |
-| `content` | TEXT | 纯文本内容 |
-| `status` | ENUM | `pending` / `approved` / `rejected`，默认 `pending` |
-| `ip` | VARCHAR(45) | 兼容 IPv6 |
-| `user_agent` | VARCHAR(500) | 截断存储，用于风控 |
-| `created_at` | TIMESTAMP | |
+| `parent_id` | INT UNSIGNED | 预留：父评论 id；v1.2 始终写 `NULL`，不支持嵌套 |
+| `nickname` | VARCHAR(60) | 游客昵称，接口限制 2–30 字符 |
+| `email` | VARCHAR(190) | 选填，**不对外返回**；接口转小写 |
+| `content` | TEXT | 纯文本内容，接口限制 1–500 字符 |
+| `status` | ENUM | `pending` / `approved` / `rejected`；表默认 `pending`（安全默认） |
+| `ip` | VARCHAR(45) | 兼容 IPv6，仅风控使用 |
+| `user_agent` | VARCHAR(500) | 截断存储，仅风控使用 |
+| `created_at` | TIMESTAMP | 按此字段正序展示 |
 
 **索引**
 
 - `idx_comments_article(article_id)`：满足外键与基础查询。
 - `idx_comments_article_status_created(article_id, status, created_at)`：详情页「某篇文章的已审核评论，按时间正序」的覆盖性更好的联合索引。
+- `idx_comments_parent(parent_id)`：为后续楼中楼查询预留。
 
-**为什么不做登录**：游客评论以「低门槛」为目标，用审核 + 限流 + 蜜罐代替账号体系。代价是无法精准溯源，因此保留 `ip` / `user_agent` 作为最低限度的风控线索。
+**v1.2 写入与读取**
+
+```sql
+-- 提交：status 由应用显式写 approved，parent_id 为 NULL
+INSERT INTO comments
+  (article_id, parent_id, nickname, email, content, status, ip, user_agent)
+VALUES (?, NULL, ?, ?, ?, 'approved', ?, ?);
+
+-- 公开列表：只查 approved，且只取展示字段
+SELECT id, nickname, content, created_at
+FROM comments
+WHERE article_id = ? AND status = 'approved'
+ORDER BY created_at ASC, id ASC
+LIMIT ? OFFSET ?;
+```
+
+- 表默认值仍是 `pending`，避免未来新增写入路径时“忘记设置状态”就自动公开；v1.2 在 `commentService.js` 中显式写 `approved`。
+- 后续开启审核：把 `SUBMIT_STATUS` 改为 `'pending'`，公开列表查询无需改动。
+- `email`、`ip`、`user_agent` 永不出现在公开接口响应中。
+- `parent_id` 需要通过 `database/migrations/v1.2.0_comments_parent_id.sql` 为存量库补齐。
+
+**为什么不做登录**：游客评论以「低门槛」为目标，用限流 + 蜜罐 + 可选审核代替账号体系。代价是无法精准溯源，因此保留 `ip` / `user_agent` 作为最低限度的风控线索。
 
 ### 2.5 messages（v1.1 启用写入）
 
@@ -243,21 +267,48 @@ mysql -u root -p -e "USE personal_blog; SELECT COUNT(*) FROM projects; SELECT CO
 
 若数据库名不是 `personal_blog`，需同步修改脚本中的 `CREATE DATABASE` / `USE` 与后端 `.env` 的 `DB_NAME`。
 
+### 3.1 存量库升级（v1.0 / v1.1 → v1.2）
+
+```bash
+mysql -u root -p < database/migrations/v1.2.0_comments_parent_id.sql
+```
+
+脚本会检查 `information_schema`，仅在缺少时添加：
+
+- `comments.parent_id INT UNSIGNED NULL`
+- `idx_comments_parent(parent_id)`
+
+**不修改任何现有数据**，重复执行会跳过。执行后可用以下语句确认：
+
+```sql
+USE personal_blog;
+SHOW COLUMNS FROM comments LIKE 'parent_id';
+SHOW INDEX FROM comments WHERE Key_name = 'idx_comments_parent';
+```
+
+全新安装无需执行；最新的 `schema.sql` 已包含该字段与索引。
+
 ---
 
 ## 4. 后续扩展设计
 
 ### 4.1 游客评论
 
-已预留：表、外键、状态字段、审核索引。
+v1.2 已实现：公开列表（仅 `approved`、分页、时间正序）+ 匿名提交（默认 `approved`）。仍待扩展：
 
-实现时补充：
+- **审核模式**：`SUBMIT_STATUS` 改为 `pending`，配合管理端或 CLI 审核；`rejected` 评论不进入公开列表。
+- **楼中楼**：使用 `parent_id`（已加索引），服务端需校验父评论属于同一文章，并限制层级；当前写入始终为 `NULL`。
+- **游标分页**：评论量增大后改用 `before_id`，避免深分页。
+- **互动**：点赞、举报、编辑/删除（需鉴权）。
+- **隐私留存**：`ip` / `user_agent` 建议 90 天后清空，导出时对 `email` 脱敏。
 
-1. **写入**：`POST /articles/:id/comments`，服务端用 `toSafeText()` 清洗，`status` 固定 `pending`。
-2. **展示**：`GET /articles/:id/comments` 仅查 `status='approved'`，不查 `email` / `ip` / `user_agent`。
-3. **审核**：站主直接改 `status`，或后续加管理端。
-4. **反垃圾**：IP 限流（应用层）+ 蜜罐字段 + 关键词表；量级上来后增加 `comments_spam` 或接入第三方风控。
-5. **可选字段**：`parent_id`（楼中楼）、`like_count`、`deleted_at`（软删除）。
+v1.2 实现要点：
+
+1. **写入**：`POST /articles/:id/comments`，`status` 显式写 `approved`，`parent_id` 写 `NULL`；昵称 2–30 字、内容 1–500 字。
+2. **展示**：`GET /articles/:id/comments` 只查 `status='approved'`，只 SELECT `id/nickname/content/created_at`。
+3. **风控**：IP 限流（默认 5 条/10 分钟）+ 蜜罐字段 + 500 字上限；`ip` / `user_agent` 用于后续追溯。
+4. **审核**：v1.2 无后台，站主可直接改 `status` 为 `rejected` 隐藏评论；未来可切回 `pending` 模式。
+5. **输出**：评论内容为纯文本，前端用文本插值（`{{ }}`），不能使用 `v-html`。
 
 ### 4.2 游客留言
 
